@@ -1,0 +1,86 @@
+"""Prompt building and reply parsing.
+
+Choices are shown to the model as single-letter codes (A, B, C…) and mapped back in code:
+a letter is usually one token, so replies are short and easy to validate.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+import string
+from collections.abc import Sequence
+
+CODES = string.ascii_uppercase
+
+STRICT_SUFFIX = " Do not write anything else: no words, no punctuation, no explanation."
+
+
+def label_codes(choices: Sequence[str]) -> dict[str, str]:
+    """Map ``["billing", "refund"]`` to ``{"A": "billing", "B": "refund"}``."""
+    if isinstance(choices, str):
+        raise TypeError("choices must be a list of strings, not a single string")
+    labels = [str(c).strip() for c in choices]
+    if len(labels) < 2:
+        raise ValueError("Need at least 2 choices")
+    if len(labels) > len(CODES):
+        raise ValueError(f"At most {len(CODES)} choices are supported, got {len(labels)}")
+    if any(not label for label in labels):
+        raise ValueError("Choices must be non-empty strings")
+    if len({_norm(label) for label in labels}) != len(labels):
+        raise ValueError("Choices must be unique (ignoring case and punctuation)")
+    return dict(zip(CODES[: len(labels)], labels, strict=True))
+
+
+def build_messages(
+    question: str, codes: dict[str, str], context: str, *, strict: bool = False
+) -> list[dict[str, str]]:
+    """Static part (question + options) goes first so Sarvam's prompt cache can reuse it;
+    the per-call context goes last."""
+    options = "\n".join(f"{code} = {label}" for code, label in codes.items())
+    letters = ", ".join(codes)
+    system = f"{question.strip()}\nOptions:\n{options}\nReply with exactly one letter: {letters}."
+    if strict:
+        system += STRICT_SUFFIX
+    return [{"role": "system", "content": system}, {"role": "user", "content": context}]
+
+
+# "B", "(B)", "B.", "B) refund", "B: refund", "B = refund", "Answer: B", "Option B"
+_LEADING_CODE = re.compile(
+    r"^(?:(?:answer|option|label|choice)\s*[:\-]?\s*)?[\(\[]?([A-Za-z])(?:\s*[\)\]\.:=\-]|\s*$)",
+    re.IGNORECASE,
+)
+_PUNCT = " \t\r\n.,:;!?\"'`*()[]{}"
+
+
+def parse_reply(text: str | None, codes: dict[str, str]) -> str | None:
+    """Return the code the model chose, or ``None`` if the reply doesn't name exactly one.
+
+    Accepts the letter with light decoration (whitespace, brackets, trailing text after a
+    separator), the label itself ("refund"), or JSON like ``{"label": "B"}``.
+    """
+    if text is None:
+        return None
+    t = text.strip()
+    if not t:
+        return None
+
+    if t.startswith("{"):
+        try:
+            obj = json.loads(t)
+        except json.JSONDecodeError:
+            obj = None
+        if isinstance(obj, dict) and obj:
+            value = obj.get("label", next(iter(obj.values())))
+            return parse_reply(str(value), codes)
+
+    m = _LEADING_CODE.match(t)
+    if m and m.group(1).upper() in codes:
+        return m.group(1).upper()
+
+    by_label = {_norm(label): code for code, label in codes.items()}
+    return by_label.get(_norm(t))
+
+
+def _norm(s: str) -> str:
+    return " ".join(s.strip(_PUNCT).lower().split())
