@@ -1,9 +1,34 @@
+# Secrets: copy .env.example to .env and add your key
 .env
+.env.*
+!.env.example
+
+# Python
 __pycache__/
-*.pyc
+*.py[cod]
 .venv/
-.pytest_cache/
-.ruff_cache/
+venv/
 *.egg-info/
 dist/
 build/
+
+# Tool caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Experiment data and outputs (private datasets, raw API responses)
+data/private/
+experiments/results/
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Office lock files (e.g. an open spreadsheet)
+~$*

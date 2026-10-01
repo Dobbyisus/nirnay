@@ -1,20 +1,24 @@
-"""The Decider: ask the model several times in one call and use the votes as confidence."""
+"""The Decider: ask the model several times in one call, use the votes as confidence, and
+escalate unsure decisions to the model's thinking mode."""
 
 from __future__ import annotations
 
 import time
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
 from .client import V1_CHAT, SarvamClient
 from .pricing import cost_inr
-from .prompt import build_messages, label_codes, parse_reply
+from .prompt import Choices, build_messages, label_codes, label_descriptions, parse_reply
 
 # Models that accept `reasoning_effort`. Others (e.g. sarvam-105b-conversations) reject it,
 # so it is left out of their requests.
 REASONING_MODELS = frozenset({"sarvam-105b"})
+
+DEFAULT_ESCALATE_BELOW = 0.8
+_AUTO: Any = object()
 
 
 @dataclass(frozen=True)
@@ -35,12 +39,21 @@ class Decision:
     ``choice`` is what the caller should act on: the winning label, or ``None`` when the
     Decider abstained (confidence below ``threshold``). If no reply was usable even after a
     retry, ``choice`` is the configured ``fallback`` and ``valid`` is ``False``.
-    ``best_guess`` is always the winning label (or ``None`` if nothing was usable).
+    ``best_guess`` is always the final answer (or ``None`` if nothing was usable).
+    ``raw_confidence`` is the vote winner's share; ``confidence`` is that value passed through
+    the Decider's calibrator, or the same as ``raw_confidence`` if there is none.
+
+    When the votes were too split, the decision was ``escalated`` to the model's thinking
+    mode: ``choice`` is then that answer (or the vote winner, if thinking gave no usable
+    answer), ``escalation_answer`` holds what thinking said, and ``confidence`` is ``None``
+    because only the voting path has a calibrated confidence. Escalated decisions never
+    abstain.
     """
 
     choice: str | None
     best_guess: str | None
     confidence: float | None
+    raw_confidence: float | None
     votes: dict[str, int]
     samples: int
     valid: bool
@@ -51,6 +64,8 @@ class Decision:
     latency_ms: float
     model: str
     raw_replies: list[str | None] = field(repr=False, default_factory=list)
+    escalated: bool = False
+    escalation_answer: str | None = None
 
     @property
     def probabilities(self) -> dict[str, float]:
@@ -61,19 +76,31 @@ class Decision:
 
 
 class Decider:
-    """Pick one label from a fixed list, with a vote-based confidence.
+    """Pick one label from a fixed list, with a vote-based confidence and escalation.
 
     One API call asks the model for ``samples`` independent answers (Sarvam's ``n``
     parameter), so the prompt is billed once and only the tiny answers are multiplied.
     Confidence is the share of samples that agree with the winner. Replies that can't be
     matched to a choice count as votes for nothing, which lowers the confidence.
 
+    When fewer than ``escalate_below`` of the votes agree, the same question is sent once
+    more with the model's default settings (thinking on), and that answer is used. Most
+    decisions stay on the fast, cheap voting path; only unsure ones pay for thinking.
+
     Args:
         model: Sarvam model ID.
         samples: answers per decision (1–128). 1 turns voting off: no confidence, and the
             default temperature becomes 0.
         temperature: sampling randomness. Voting needs some (default 1.0 when samples > 1).
-        threshold: if set, decisions with confidence below it abstain (``choice=None``).
+        escalate_below: escalate when the winner's vote share is below this (0.8 = fewer
+            than 8 of 10 agree). Defaults to 0.8 for models with thinking and off otherwise;
+            pass ``None`` to turn escalation off.
+        escalation_max_tokens: token cap for the thinking call; ``None`` uses the server
+            default (2048 for sarvam-105b), which thinking counts against.
+        threshold: if set, non-escalated decisions with confidence below it abstain
+            (``choice=None``). Applied to the calibrated confidence when a calibrator is set.
+        calibrator: maps raw vote share to calibrated confidence, e.g. a fitted
+            :class:`~nirnay.calibration.IsotonicCalibrator`. Any ``float -> float`` callable works.
         fallback: returned as ``choice`` when no usable reply came back, even after a retry.
         reasoning_effort: ``None`` (default) turns hidden reasoning off, which is much
             faster and cheaper for this kind of question. Pass "low"/"medium"/"high" to
@@ -90,7 +117,10 @@ class Decider:
         *,
         samples: int = 10,
         temperature: float | None = None,
+        escalate_below: float | None = _AUTO,
+        escalation_max_tokens: int | None = None,
         threshold: float | None = None,
+        calibrator: Callable[[float], float] | None = None,
         fallback: str | None = None,
         reasoning_effort: str | None = None,
         max_tokens: int = 4,
@@ -108,6 +138,21 @@ class Decider:
                 raise ValueError("threshold needs samples > 1 (one sample has no confidence)")
             if not 0.0 <= threshold <= 1.0:
                 raise ValueError("threshold must be between 0 and 1")
+        if calibrator is not None and samples == 1:
+            raise ValueError("calibrator needs samples > 1 (one sample has no confidence)")
+        if escalate_below is _AUTO:
+            thinking = model in REASONING_MODELS and samples > 1
+            escalate_below = DEFAULT_ESCALATE_BELOW if thinking else None
+        if escalate_below is not None:
+            if samples == 1:
+                raise ValueError("escalate_below needs samples > 1 (one sample has no votes)")
+            if not 0.0 < escalate_below <= 1.0:
+                raise ValueError("escalate_below must be in (0, 1]")
+            if model not in REASONING_MODELS:
+                raise ValueError(f"escalation needs a model with thinking; {model!r} has none")
+        self.escalate_below = escalate_below
+        self.escalation_max_tokens = escalation_max_tokens
+        self.calibrator = calibrator
         self.model = model
         self.samples = samples
         self.temperature = temperature
@@ -119,17 +164,28 @@ class Decider:
         self._own_client = client is None
         self.client = client or SarvamClient()
 
-    def decide(self, question: str, choices: Sequence[str], context: str) -> Decision:
+    def decide(self, question: str, choices: Choices, context: str) -> Decision:
+        """Pick one of ``choices`` for ``context``.
+
+        ``choices`` is a list of labels, or a mapping of label → short description for labels
+        whose meaning isn't obvious from the name. Descriptions cost extra input tokens (billed
+        at the cached rate after the first call), so add them where they help.
+        """
         codes = label_codes(choices)
+        descriptions = label_descriptions(choices)
         start = time.perf_counter()
         totals = Counter()
 
-        replies = self._sample(build_messages(question, codes, context), totals)
+        messages = build_messages(question, codes, context, descriptions=descriptions)
+        replies = self._sample(messages, totals)
         picked = [parse_reply(r, codes) for r in replies]
         retried = False
         if not any(picked):
             retried = True
-            replies = self._sample(build_messages(question, codes, context, strict=True), totals)
+            messages = build_messages(
+                question, codes, context, descriptions=descriptions, strict=True
+            )
+            replies = self._sample(messages, totals)
             picked = [parse_reply(r, codes) for r in replies]
 
         n = len(replies)
@@ -137,6 +193,19 @@ class Decider:
         # Ties go to the choice listed first; the low confidence already flags them.
         order = list(codes)
         ranked = sorted(counts, key=lambda c: (-counts[c], order.index(c)))
+        winner = codes[ranked[0]] if ranked else None
+        raw = counts[ranked[0]] / n if ranked and self.samples > 1 else None
+
+        # Escalate split (or entirely unusable) votes to the model's thinking mode, using the
+        # original prompt. If thinking gives no usable answer, keep the vote winner.
+        escalated, escalation_answer = False, None
+        if self.escalate_below is not None and (raw is None or raw < self.escalate_below):
+            escalated = True
+            content = self._think(
+                build_messages(question, codes, context, descriptions=descriptions), totals
+            )
+            code = parse_reply(content, codes)
+            escalation_answer = codes[code] if code else None
 
         usage = Usage(
             input_tokens=totals["input"],
@@ -148,35 +217,27 @@ class Decider:
         # Time spent deliberately pacing calls for rate limits isn't the model's latency.
         latency_ms = (time.perf_counter() - start) * 1000 - totals["paced_ms"]
 
-        if not ranked:
-            return Decision(
-                choice=self.fallback,
-                best_guess=None,
-                confidence=None,
-                votes={},
-                samples=n,
-                valid=False,
-                abstained=False,
-                invalid_samples=n,
-                retried=retried,
-                usage=usage,
-                latency_ms=latency_ms,
-                model=self.model,
-                raw_replies=replies,
+        final = escalation_answer or winner
+        if escalated:
+            confidence, abstained = None, False
+        else:
+            confidence = self.calibrator(raw) if raw is not None and self.calibrator else raw
+            abstained = (
+                self.threshold is not None
+                and confidence is not None
+                and confidence < self.threshold
             )
-
-        best = codes[ranked[0]]
-        confidence = counts[ranked[0]] / n if self.samples > 1 else None
-        abstained = (
-            self.threshold is not None and confidence is not None and confidence < self.threshold
-        )
+        choice = self.fallback if final is None else final
+        if abstained:
+            choice = None
         return Decision(
-            choice=None if abstained else best,
-            best_guess=best,
+            choice=choice,
+            best_guess=final,
             confidence=confidence,
+            raw_confidence=raw,
             votes={codes[c]: counts[c] for c in ranked},
             samples=n,
-            valid=True,
+            valid=final is not None,
             abstained=abstained,
             invalid_samples=n - sum(counts.values()),
             retried=retried,
@@ -184,7 +245,19 @@ class Decider:
             latency_ms=latency_ms,
             model=self.model,
             raw_replies=replies,
+            escalated=escalated,
+            escalation_answer=escalation_answer,
         )
+
+    def _think(self, messages: list[dict[str, str]], totals: Counter) -> str | None:
+        """One answer with the model's default settings (thinking on)."""
+        body: dict[str, Any] = {"model": self.model, "messages": messages}
+        if self.escalation_max_tokens is not None:
+            body["max_tokens"] = self.escalation_max_tokens
+        data = self.client.chat(body, endpoint=self.endpoint)
+        self._account(data, totals)
+        choices = data.get("choices") or [{}]
+        return (choices[0].get("message") or {}).get("content")
 
     def _sample(self, messages: list[dict[str, str]], totals: Counter) -> list[str | None]:
         body: dict[str, Any] = {
@@ -198,14 +271,16 @@ class Decider:
         if self.model in REASONING_MODELS:
             body["reasoning_effort"] = self.reasoning_effort  # None → JSON null → reasoning off
         data = self.client.chat(body, endpoint=self.endpoint)
-        totals["paced_ms"] += self.client.last_paced_s * 1000
+        self._account(data, totals)
+        return [(c.get("message") or {}).get("content") for c in data.get("choices") or []]
 
+    def _account(self, data: dict[str, Any], totals: Counter) -> None:
+        totals["paced_ms"] += self.client.last_paced_s * 1000
         u = data.get("usage") or {}
         totals["input"] += u.get("prompt_tokens") or 0
         totals["output"] += u.get("completion_tokens") or 0
         totals["cached"] += (u.get("prompt_tokens_details") or {}).get("cached_tokens") or 0
         totals["calls"] += 1
-        return [(c.get("message") or {}).get("content") for c in data.get("choices") or []]
 
     def close(self) -> None:
         if self._own_client:

@@ -12,6 +12,7 @@ Every request and response is appended to experiments/results/probe_<timestamp>.
 
 Run:  python experiments/probe_logprobs.py
 """
+
 import json
 import math
 import os
@@ -30,8 +31,10 @@ BASE = "https://api.sarvam.ai"
 MIN_GAP_S = 1.6  # stay under 40 requests/minute (sarvam-105b, Starter tier)
 
 CHOICES = {"A": "billing", "B": "refund", "C": "technical", "D": "other"}
-SYSTEM = ("You route customer support messages. Categories: A = billing, B = refund, "
-          "C = technical, D = other. Reply with exactly one letter: A, B, C or D.")
+SYSTEM = (
+    "You route customer support messages. Categories: A = billing, B = refund, "
+    "C = technical, D = other. Reply with exactly one letter: A, B, C or D."
+)
 
 # (name, message, expected letter or None if genuinely ambiguous)
 MESSAGES = [
@@ -64,8 +67,7 @@ SCHEMA = {
 
 class Probe:
     def __init__(self, key: str, log_path: Path):
-        self.client = httpx.Client(base_url=BASE, timeout=90,
-                                   headers={"api-subscription-key": key})
+        self.client = httpx.Client(base_url=BASE, timeout=90, headers={"api-subscription-key": key})
         self.log = log_path.open("a", encoding="utf-8")
         self.last = 0.0
         self.calls = 0
@@ -88,23 +90,34 @@ class Probe:
                 data = json.loads(text)
             except (json.JSONDecodeError, TypeError):
                 data = None
-            self.log.write(json.dumps({"test": test, "path": path, "request": body,
-                                       "status": status, "latency_ms": latency_ms,
-                                       "response": data if data is not None else text},
-                                      ensure_ascii=False) + "\n")
+            self.log.write(
+                json.dumps(
+                    {
+                        "test": test,
+                        "path": path,
+                        "request": body,
+                        "status": status,
+                        "latency_ms": latency_ms,
+                        "response": data if data is not None else text,
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
             self.log.flush()
             if status in (429, 503) and attempt < 3:
-                time.sleep(2 ** attempt * 5)
+                time.sleep(2**attempt * 5)
                 continue
             return status, data, text, latency_ms
         return status, data, text, latency_ms
 
 
 def chat_body(model, message, *, reasoning_off=True, max_tokens=5, **extra):
-    body = {"model": model,
-            "messages": [{"role": "system", "content": SYSTEM},
-                         {"role": "user", "content": message}],
-            "max_tokens": max_tokens}
+    body = {
+        "model": model,
+        "messages": [{"role": "system", "content": SYSTEM}, {"role": "user", "content": message}],
+        "max_tokens": max_tokens,
+    }
     if reasoning_off:
         body["reasoning_effort"] = None
     body.update(extra)
@@ -116,7 +129,10 @@ def err(text):
 
 
 def letter_distribution(choice):
-    """Find the first output position that is an answer letter; return (token, dist, letter_mass, n_alts)."""
+    """Find the first output position that is an answer letter.
+
+    Returns its token, the distribution over letters, the probability mass on letters and the
+    number of alternatives returned."""
     lp = (choice or {}).get("logprobs")
     content = lp.get("content") if isinstance(lp, dict) else None
     if not content:
@@ -132,10 +148,20 @@ def letter_distribution(choice):
                     probs[t] += math.exp(a["logprob"])
             mass = sum(probs.values())
             dist = {k: probs[k] / mass for k in CHOICES} if mass else {}
-            return {"token_repr": repr(pos["token"]), "dist": dist, "letter_mass": mass,
-                    "n_alts": len(alts), "alt_tokens": [a.get("token") for a in alts]}
-    return {"token_repr": None, "dist": {}, "letter_mass": 0, "n_alts": 0,
-            "alt_tokens": [p.get("token") for p in content]}
+            return {
+                "token_repr": repr(pos["token"]),
+                "dist": dist,
+                "letter_mass": mass,
+                "n_alts": len(alts),
+                "alt_tokens": [a.get("token") for a in alts],
+            }
+    return {
+        "token_repr": None,
+        "dist": {},
+        "letter_mass": 0,
+        "n_alts": 0,
+        "alt_tokens": [p.get("token") for p in content],
+    }
 
 
 def fmt_dist(d):
@@ -157,9 +183,15 @@ def main():
     msg0, msg1 = MESSAGES[0][1], MESSAGES[1][1]
 
     print("\n== 1. Reasoning: default vs off (V1, sarvam-105b) ==")
-    for label, off, mt in [("default (thinking on)", False, 1024), ("reasoning_effort=None", True, 5)]:
-        s, d, t, ms = p.post(f"v1_reasoning_{'off' if off else 'default'}", "/v1/chat/completions",
-                             chat_body("sarvam-105b", msg0, reasoning_off=off, max_tokens=mt))
+    for label, off, mt in [
+        ("default (thinking on)", False, 1024),
+        ("reasoning_effort=None", True, 5),
+    ]:
+        s, d, t, ms = p.post(
+            f"v1_reasoning_{'off' if off else 'default'}",
+            "/v1/chat/completions",
+            chat_body("sarvam-105b", msg0, reasoning_off=off, max_tokens=mt),
+        )
         if s == 403:
             sys.exit(f"403: API key rejected. Check the key in .env. {err(t)}")
         if s != 200:
@@ -168,20 +200,29 @@ def main():
             continue
         m = d["choices"][0]["message"]
         rc = m.get("reasoning_content") or ""
-        print(f"  {label}: answer={m.get('content')!r}  usage={d.get('usage')}  "
-              f"reasoning_chars={len(rc)}  latency={ms} ms")
-        summary[f"reasoning_{label}"] = {"answer": m.get("content"), "usage": d.get("usage"),
-                                         "reasoning_chars": len(rc), "latency_ms": ms}
+        print(
+            f"  {label}: answer={m.get('content')!r}  usage={d.get('usage')}  "
+            f"reasoning_chars={len(rc)}  latency={ms} ms"
+        )
+        summary[f"reasoning_{label}"] = {
+            "answer": m.get("content"),
+            "usage": d.get("usage"),
+            "reasoning_chars": len(rc),
+            "latency_ms": ms,
+        }
 
     print("\n== 2. Does V1 accept logprobs? (docs say V2 only) ==")
     for model in ["sarvam-105b", "sarvam-105b-conversations"]:
-        body = chat_body(model, msg0, reasoning_off=(model == "sarvam-105b"),
-                         logprobs=True, top_logprobs=5)
+        body = chat_body(
+            model, msg0, reasoning_off=(model == "sarvam-105b"), logprobs=True, top_logprobs=5
+        )
         s, d, t, ms = p.post(f"v1_logprobs_{model}", "/v1/chat/completions", body)
         if s == 200:
             ld = letter_distribution(d["choices"][0])
-            print(f"  {model}: HTTP 200, logprobs={'present' if ld else 'absent/null'}"
-                  + (f"  {fmt_dist(ld['dist'])}" if ld else ""))
+            print(
+                f"  {model}: HTTP 200, logprobs={'present' if ld else 'absent/null'}"
+                + (f"  {fmt_dist(ld['dist'])}" if ld else "")
+            )
             summary[f"v1_logprobs_{model}"] = {"status": 200, "logprobs": ld}
         else:
             print(f"  {model}: HTTP {s} {err(t)}")
@@ -189,33 +230,63 @@ def main():
 
     print("\n== 3. V2 access + logprobs (sarvam-105b) ==")
     v2_reasoning_off = True
-    s, d, t, ms = p.post("v2_access", "/v2/chat/completions",
-                         chat_body("sarvam-105b", msg0, logprobs=True, top_logprobs=5))
+    s, d, t, ms = p.post(
+        "v2_access",
+        "/v2/chat/completions",
+        chat_body("sarvam-105b", msg0, logprobs=True, top_logprobs=5),
+    )
     if s == 400 and "reasoning" in t.lower():
         print(f"  reasoning_effort=None rejected on V2 ({err(t)}); retrying without it")
         v2_reasoning_off = False
-        s, d, t, ms = p.post("v2_access_no_reasoning_field", "/v2/chat/completions",
-                             chat_body("sarvam-105b", msg0, reasoning_off=False, logprobs=True,
-                                       top_logprobs=5, max_tokens=256))
+        s, d, t, ms = p.post(
+            "v2_access_no_reasoning_field",
+            "/v2/chat/completions",
+            chat_body(
+                "sarvam-105b",
+                msg0,
+                reasoning_off=False,
+                logprobs=True,
+                top_logprobs=5,
+                max_tokens=256,
+            ),
+        )
     v2_ok = s == 200
-    summary["v2_access"] = {"status": s, "error": None if v2_ok else err(t),
-                            "reasoning_field_accepted": v2_reasoning_off}
+    summary["v2_access"] = {
+        "status": s,
+        "error": None if v2_ok else err(t),
+        "reasoning_field_accepted": v2_reasoning_off,
+    }
     if not v2_ok:
         print(f"  V2 NOT available for this key: HTTP {s} {err(t)}")
-        print("  → Request beta whitelisting from Sarvam (docs: api-reference/beta-apis). "
-              "Skipping V2 tests.")
+        print(
+            "  → Request beta whitelisting from Sarvam (docs: api-reference/beta-apis). "
+            "Skipping V2 tests."
+        )
     else:
         ld = letter_distribution(d["choices"][0])
-        print(f"  V2 OK. answer={d['choices'][0]['message'].get('content')!r} usage={d.get('usage')}")
+        print(
+            f"  V2 OK. answer={d['choices'][0]['message'].get('content')!r} usage={d.get('usage')}"
+        )
         print(f"  letter token={ld and ld['token_repr']}  alternatives={ld and ld['alt_tokens']}")
-        print(f"  distribution: {fmt_dist(ld and ld['dist'])}  (mass on letters={ld and ld['letter_mass']:.3f})")
+        print(
+            f"  distribution: {fmt_dist(ld and ld['dist'])}  "
+            f"(mass on letters={ld and ld['letter_mass']:.3f})"
+        )
         summary["v2_first"] = {"usage": d.get("usage"), "logprobs": ld}
         mt = 5 if v2_reasoning_off else 256
 
         def v2(test, message, **extra):
-            return p.post(test, "/v2/chat/completions",
-                          chat_body("sarvam-105b", message, reasoning_off=v2_reasoning_off,
-                                    max_tokens=extra.pop("max_tokens", mt), **extra))
+            return p.post(
+                test,
+                "/v2/chat/completions",
+                chat_body(
+                    "sarvam-105b",
+                    message,
+                    reasoning_off=v2_reasoning_off,
+                    max_tokens=extra.pop("max_tokens", mt),
+                    **extra,
+                ),
+            )
 
         print("\n== 4. How many alternatives can we get? ==")
         best_k = 5
@@ -242,9 +313,17 @@ def main():
                 continue
             ld = letter_distribution(d["choices"][0])
             ans = d["choices"][0]["message"].get("content")
-            print(f"  {name:20s} ans={ans!r:6} gold={gold or '?'}  {fmt_dist(ld and ld['dist'])}  {ms} ms")
-            summary["prompt_only"][name] = {"answer": ans, "gold": gold, "logprobs": ld,
-                                            "usage": d.get("usage"), "latency_ms": ms}
+            print(
+                f"  {name:20s} ans={ans!r:6} gold={gold or '?'}  "
+                f"{fmt_dist(ld and ld['dist'])}  {ms} ms"
+            )
+            summary["prompt_only"][name] = {
+                "answer": ans,
+                "gold": gold,
+                "logprobs": ld,
+                "usage": d.get("usage"),
+                "latency_ms": ms,
+            }
 
         print("\n== 6. Stability: same question x10 ==")
         summary["stability"] = {}
@@ -258,54 +337,84 @@ def main():
                     tops.append((letter, round(ld["dist"][letter], 4)))
             vals = [v for _, v in tops]
             if vals:
-                print(f"  {name}: top letters={Counter(l for l, _ in tops)}  "
-                      f"top prob min={min(vals):.3f} max={max(vals):.3f} spread={max(vals) - min(vals):.3f}")
+                print(
+                    f"  {name}: top letters={Counter(letter for letter, _ in tops)}  "
+                    f"top prob min={min(vals):.3f} max={max(vals):.3f} "
+                    f"spread={max(vals) - min(vals):.3f}"
+                )
             summary["stability"][name] = tops
 
         print("\n== 7. Does temperature change the logprobs? ==")
         summary["temperature"] = {}
         for temp in [0.0, 1.0]:
-            s, d, t, _ = v2(f"v2_temp_{temp}", msg1, logprobs=True, top_logprobs=best_k, temperature=temp)
+            s, d, t, _ = v2(
+                f"v2_temp_{temp}", msg1, logprobs=True, top_logprobs=best_k, temperature=temp
+            )
             ld = letter_distribution(d["choices"][0]) if s == 200 else None
-            print(f"  temperature={temp}: " + (fmt_dist(ld["dist"]) if ld else f"HTTP {s} {err(t)}"))
+            print(
+                f"  temperature={temp}: " + (fmt_dist(ld["dist"]) if ld else f"HTTP {s} {err(t)}")
+            )
             summary["temperature"][temp] = ld
 
         print("\n== 8. Strict schema mode + logprobs ==")
         summary["strict_schema"] = {}
         for name, msg, gold in MESSAGES:
-            s, d, t, ms = v2(f"v2_schema_{name}", msg, logprobs=True, top_logprobs=best_k,
-                             response_format=SCHEMA, max_tokens=mt + 15)
+            s, d, t, ms = v2(
+                f"v2_schema_{name}",
+                msg,
+                logprobs=True,
+                top_logprobs=best_k,
+                response_format=SCHEMA,
+                max_tokens=mt + 15,
+            )
             if s != 200:
                 print(f"  {name:20s} HTTP {s} {err(t)}")
                 summary["strict_schema"][name] = {"status": s, "error": err(t)}
                 continue
             ld = letter_distribution(d["choices"][0])
             ans = d["choices"][0]["message"].get("content")
-            print(f"  {name:20s} content={ans!r:18} {fmt_dist(ld and ld['dist'])}  "
-                  f"out_tokens={(d.get('usage') or {}).get('completion_tokens')}")
-            summary["strict_schema"][name] = {"content": ans, "gold": gold, "logprobs": ld,
-                                              "usage": d.get("usage"), "latency_ms": ms}
+            print(
+                f"  {name:20s} content={ans!r:18} {fmt_dist(ld and ld['dist'])}  "
+                f"out_tokens={(d.get('usage') or {}).get('completion_tokens')}"
+            )
+            summary["strict_schema"][name] = {
+                "content": ans,
+                "gold": gold,
+                "logprobs": ld,
+                "usage": d.get("usage"),
+                "latency_ms": ms,
+            }
 
     print("\n== 9. Backup plan: ask n=10 times in one call (V1) ==")
     summary["self_consistency"] = {}
-    for model, name, msg in [("sarvam-105b", *MESSAGES[0][:2]), ("sarvam-105b", *MESSAGES[1][:2]),
-                             ("sarvam-105b-conversations", *MESSAGES[1][:2])]:
-        body = chat_body(model, msg, reasoning_off=(model == "sarvam-105b"), max_tokens=3,
-                         n=10, temperature=1.0)
+    for model, name, msg in [
+        ("sarvam-105b", *MESSAGES[0][:2]),
+        ("sarvam-105b", *MESSAGES[1][:2]),
+        ("sarvam-105b-conversations", *MESSAGES[1][:2]),
+    ]:
+        body = chat_body(
+            model, msg, reasoning_off=(model == "sarvam-105b"), max_tokens=3, n=10, temperature=1.0
+        )
         s, d, t, ms = p.post(f"v1_n10_{model}_{name}", "/v1/chat/completions", body)
         if s != 200:
             print(f"  {model} / {name}: HTTP {s} {err(t)}")
             summary["self_consistency"][f"{model}/{name}"] = {"status": s, "error": err(t)}
             continue
         votes = Counter((c["message"].get("content") or "").strip()[:1] for c in d["choices"])
-        print(f"  {model} / {name}: votes={dict(votes)}  choices={len(d['choices'])}  "
-              f"usage={d.get('usage')}  {ms} ms")
-        summary["self_consistency"][f"{model}/{name}"] = {"votes": dict(votes), "usage": d.get("usage"),
-                                                         "latency_ms": ms}
+        print(
+            f"  {model} / {name}: votes={dict(votes)}  choices={len(d['choices'])}  "
+            f"usage={d.get('usage')}  {ms} ms"
+        )
+        summary["self_consistency"][f"{model}/{name}"] = {
+            "votes": dict(votes),
+            "usage": d.get("usage"),
+            "latency_ms": ms,
+        }
 
     summary["calls"] = p.calls
     (RESULTS / f"probe_{stamp}_summary.json").write_text(
-        json.dumps(summary, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+        json.dumps(summary, ensure_ascii=False, indent=2, default=str), encoding="utf-8"
+    )
     print(f"\nDone: {p.calls} calls. Raw log: {log_path.relative_to(ROOT)}")
     print(f"Summary: {(RESULTS / f'probe_{stamp}_summary.json').relative_to(ROOT)}")
 

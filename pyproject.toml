@@ -26,6 +26,7 @@ pythonpath = ["src"]
 line-length = 100
 target-version = "py310"
 src = ["src", "tests"]
+extend-exclude = ["*.md"]  # keep hand-aligned code examples in docs as written
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "SIM"]

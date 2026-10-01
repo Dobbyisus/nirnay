@@ -1,6 +1,6 @@
 import pytest
 
-from nirnay.prompt import build_messages, label_codes, parse_reply
+from nirnay.prompt import build_messages, label_codes, label_descriptions, parse_reply
 
 CODES = {"A": "billing", "B": "refund", "C": "technical", "D": "other"}
 
@@ -31,6 +31,26 @@ def test_build_messages_puts_static_part_first():
     assert system["content"].endswith("Reply with exactly one letter: A, B, C, D.")
 
 
+def test_label_codes_accepts_description_mapping():
+    choices = {"order": "placing or cancelling orders", "cancel": "cancellation fees only"}
+    assert label_codes(choices) == {"A": "order", "B": "cancel"}
+
+
+def test_label_descriptions_skip_blanks_and_plain_lists():
+    assert label_descriptions(["order", "cancel"]) == {}
+    assert label_descriptions({"order": "  orders ", "cancel": None, "refund": " "}) == {
+        "order": "orders"
+    }
+
+
+def test_build_messages_includes_descriptions_where_given():
+    codes = {"A": "order", "B": "cancel"}
+    system, _ = build_messages(
+        "Which team?", codes, "x", descriptions={"cancel": "cancellation fees only"}
+    )
+    assert "A = order\nB = cancel: cancellation fees only\n" in system["content"]
+
+
 def test_strict_prompt_adds_instruction():
     system, _ = build_messages("Which team?", CODES, "x", strict=True)
     assert "Do not write anything else" in system["content"]
@@ -52,6 +72,10 @@ def test_strict_prompt_adds_instruction():
         ("  Technical. ", "C"),
         ('{"label": "A"}', "A"),
         ('{"label": "refund"}', "B"),
+        ("बी", "B"),
+        ("डी।", "D"),
+        (" सी ", "C"),
+        ("ए", "A"),
     ],
 )
 def test_parse_reply_accepts_decorated_answers(reply, expected):
@@ -60,7 +84,18 @@ def test_parse_reply_accepts_decorated_answers(reply, expected):
 
 @pytest.mark.parametrize(
     "reply",
-    [None, "", "   ", "E", "Billing or refund", "A refund request", "I think", "{not json"],
+    [
+        None,
+        "",
+        "   ",
+        "E",
+        "Billing or refund",
+        "A refund request",
+        "I think",
+        "{not json",
+        "ई",  # Devanagari "E": not one of the four codes
+        "मैं",  # a word, not a letter name
+    ],
 )
 def test_parse_reply_rejects_unusable_answers(reply):
     assert parse_reply(reply, CODES) is None
