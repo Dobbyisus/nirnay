@@ -23,7 +23,7 @@ against `sarvam-105b` with Sarvam's default settings:
 > slightly more accurate on 4 of 5 tasks. Read it as **similar accuracy, much lower cost and
 > latency, and no failed decisions.** Full results and caveats are [below](#benchmark).
 
-![Accuracy by task](assets/benchmarks/01_accuracy_with_descriptions.png)
+![Accuracy by task](https://raw.githubusercontent.com/Dobbyisus/nirnay/main/assets/benchmarks/01_accuracy_with_descriptions.png)
 
 ---
 
@@ -88,7 +88,7 @@ result.latency_ms      # ≈ 180
   cache can bill it at the cached rate.
 - Rate limits (429) and transient errors are retried with backoff; `min_interval_s` paces calls.
 
-![Label descriptions](assets/benchmarks/08_label_descriptions.png)
+![Label descriptions](https://raw.githubusercontent.com/Dobbyisus/nirnay/main/assets/benchmarks/08_label_descriptions.png)
 
 ## Calibration
 
@@ -110,7 +110,7 @@ Calibrate when you have a few hundred labelled examples and the raw vote share l
 overconfident. With small or noisy dev sets the raw vote share is often already a reasonable
 confidence (see the benchmark).
 
-![Confidence honesty](assets/benchmarks/11_confidence_honesty.png)
+![Confidence honesty](https://raw.githubusercontent.com/Dobbyisus/nirnay/main/assets/benchmarks/11_confidence_honesty.png)
 
 ## API
 
@@ -170,10 +170,10 @@ two systems are within noise of each other (support 75.2% vs 73.1%, voice scenar
 78.2%, tweets 66.7% vs 64.7%), and nirnay escalates more and saves less (costs 12–54% of the
 default).
 
-![Cost per 1,000 decisions](assets/benchmarks/03_cost_per_1000.png)
-![Typical response time](assets/benchmarks/04_latency_typical.png)
-![Failed answers](assets/benchmarks/06_failed_answers.png)
-![Default accuracy when it answered](assets/benchmarks/07_default_answered_only.png)
+![Cost per 1,000 decisions](https://raw.githubusercontent.com/Dobbyisus/nirnay/main/assets/benchmarks/03_cost_per_1000.png)
+![Typical response time](https://raw.githubusercontent.com/Dobbyisus/nirnay/main/assets/benchmarks/04_latency_typical.png)
+![Failed answers](https://raw.githubusercontent.com/Dobbyisus/nirnay/main/assets/benchmarks/06_failed_answers.png)
+![Default accuracy when it answered](https://raw.githubusercontent.com/Dobbyisus/nirnay/main/assets/benchmarks/07_default_answered_only.png)
 
 ### Caveats
 
@@ -228,4 +228,4 @@ ruff check .
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT. See [LICENSE](https://github.com/Dobbyisus/nirnay/blob/main/LICENSE).
