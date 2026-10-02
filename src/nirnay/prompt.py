@@ -79,26 +79,42 @@ _LEADING_CODE = re.compile(
 )
 _PUNCT = " \t\r\n.,:;!?\"'`*()[]{}।"
 
-# How the Latin letters are spelt in Devanagari. Replying to Hindi input, the model sometimes
-# writes the letter's name ("बी") instead of the letter ("B").
-_DEVANAGARI_LETTERS = {
+# How the Latin letters are spelt in Indian scripts. Replying to Hindi, Bengali or Tamil input,
+# the model sometimes writes the letter's name ("बी", "বি") instead of the letter ("B").
+_SPELT_LETTERS = {
+    # Devanagari
     "ए": "A", "बी": "B", "सी": "C", "डी": "D", "ई": "E", "एफ": "F", "जी": "G", "एच": "H",
     "आई": "I", "जे": "J", "के": "K", "एल": "L", "एम": "M", "एन": "N", "ओ": "O", "पी": "P",
     "क्यू": "Q", "आर": "R", "एस": "S", "टी": "T", "यू": "U", "वी": "V", "डब्ल्यू": "W",
     "एक्स": "X", "वाई": "Y", "ज़ेड": "Z", "जेड": "Z",
+    # Bengali
+    "এ": "A", "বি": "B", "সি": "C", "ডি": "D", "ই": "E", "এফ": "F", "জি": "G", "এইচ": "H",
+    "আই": "I", "জে": "J", "কে": "K", "এল": "L", "এম": "M", "এন": "N", "ও": "O", "পি": "P",
+    "কিউ": "Q", "আর": "R", "এস": "S", "টি": "T", "ইউ": "U", "ভি": "V", "ডাব্লিউ": "W",
+    "ডব্লিউ": "W", "এক্স": "X", "ওয়াই": "Y", "জেড": "Z",
+    # Tamil. B/P (பி) and D/T (டி) are spelt the same, so those are left out as ambiguous.
+    "ஏ": "A", "சி": "C", "ஈ": "E", "எஃப்": "F", "ஜி": "G", "எச்": "H", "ஹெச்": "H",
+    "ஐ": "I", "ஜே": "J", "கே": "K", "எல்": "L", "எம்": "M", "என்": "N", "ஓ": "O",
+    "க்யூ": "Q", "ஆர்": "R", "எஸ்": "S", "யூ": "U", "வி": "V", "எக்ஸ்": "X", "வை": "Y",
+    "இசட்": "Z",
 }  # fmt: skip
+
+# Tamil spells B/P and D/T the same way. These only count when exactly one of the two letters
+# is an option (e.g. a positive/negative question has A and B, so "பி" can only mean B).
+_AMBIGUOUS_SPELT = {"பி": ("B", "P"), "டி": ("D", "T")}
 
 
 def parse_reply(text: str | None, codes: dict[str, str]) -> str | None:
     """Return the code the model chose, or ``None`` if the reply doesn't name exactly one.
 
     Accepts the letter with light decoration (whitespace, brackets, trailing text after a
-    separator), the letter spelt in Devanagari ("बी"), the label itself ("refund"), or JSON
-    like ``{"label": "B"}``.
+    separator), a letter alone on the first line followed by an explanation, the letter spelt
+    in Devanagari, Bengali or Tamil ("बी", "বি"), the label itself ("refund"), or JSON like
+    ``{"label": "B"}``. Anything before a leaked ``</think>`` tag is ignored.
     """
     if text is None:
         return None
-    t = text.strip()
+    t = text.rsplit("</think>", 1)[-1].strip()
     if not t:
         return None
 
@@ -111,13 +127,17 @@ def parse_reply(text: str | None, codes: dict[str, str]) -> str | None:
             value = obj.get("label", next(iter(obj.values())))
             return parse_reply(str(value), codes)
 
-    m = _LEADING_CODE.match(t)
-    if m and m.group(1).upper() in codes:
-        return m.group(1).upper()
-
-    spelt = _DEVANAGARI_LETTERS.get(t.strip(_PUNCT))
-    if spelt in codes:
-        return spelt
+    first_line = t.splitlines()[0].strip()
+    for candidate in (t, first_line):
+        m = _LEADING_CODE.match(candidate)
+        if m and m.group(1).upper() in codes:
+            return m.group(1).upper()
+        spelt = _SPELT_LETTERS.get(candidate.strip(_PUNCT))
+        if spelt in codes:
+            return spelt
+        options = [c for c in _AMBIGUOUS_SPELT.get(candidate.strip(_PUNCT), ()) if c in codes]
+        if len(options) == 1:
+            return options[0]
 
     by_label = {_norm(label): code for code, label in codes.items()}
     return by_label.get(_norm(t))

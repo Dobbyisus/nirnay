@@ -51,6 +51,15 @@ def test_build_messages_includes_descriptions_where_given():
     assert "A = order\nB = cancel: cancellation fees only\n" in system["content"]
 
 
+def test_ambiguous_tamil_letters_resolve_only_when_one_option_fits():
+    two = {"A": "positive", "B": "negative"}
+    assert parse_reply("பி", two) == "B"  # P isn't an option, so it can only be B
+    assert parse_reply("டி", two) is None  # neither D nor T is an option
+    many = {c: c.lower() for c in "ABCDEFGHIJKLMNOPQR"}
+    assert parse_reply("பி", many) is None  # B and P are both options: ambiguous
+    assert parse_reply("டி", many) == "D"  # T isn't an option
+
+
 def test_strict_prompt_adds_instruction():
     system, _ = build_messages("Which team?", CODES, "x", strict=True)
     assert "Do not write anything else" in system["content"]
@@ -76,6 +85,12 @@ def test_strict_prompt_adds_instruction():
         ("डी।", "D"),
         (" सी ", "C"),
         ("ए", "A"),
+        ("বি", "B"),  # Bengali
+        ("এ", "A"),
+        ("সি।", "C"),
+        ("சி", "C"),  # Tamil
+        ("I</think>\nC", "C"),  # leaked reasoning tag
+        ("D\n\n(This request is about something else)", "D"),  # letter, then explanation
     ],
 )
 def test_parse_reply_accepts_decorated_answers(reply, expected):
@@ -95,6 +110,7 @@ def test_parse_reply_accepts_decorated_answers(reply, expected):
         "{not json",
         "ई",  # Devanagari "E": not one of the four codes
         "मैं",  # a word, not a letter name
+        "Answer:\nmaybe",
     ],
 )
 def test_parse_reply_rejects_unusable_answers(reply):

@@ -20,7 +20,7 @@ build/
 htmlcov/
 
 # Experiment data and outputs (private datasets, raw API responses)
-data/private/
+data/
 experiments/results/
 
 # Editors and OS
@@ -32,3 +32,6 @@ desktop.ini
 
 # Office lock files (e.g. an open spreadsheet)
 ~$*
+
+# Generated deliverables (article PDF, chart zip)
+deliverables/

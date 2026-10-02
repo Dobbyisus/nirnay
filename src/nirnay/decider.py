@@ -66,6 +66,7 @@ class Decision:
     raw_replies: list[str | None] = field(repr=False, default_factory=list)
     escalated: bool = False
     escalation_answer: str | None = None
+    escalation_reply: str | None = field(repr=False, default=None)
 
     @property
     def probabilities(self) -> dict[str, float]:
@@ -198,7 +199,7 @@ class Decider:
 
         # Escalate split (or entirely unusable) votes to the model's thinking mode, using the
         # original prompt. If thinking gives no usable answer, keep the vote winner.
-        escalated, escalation_answer = False, None
+        escalated, escalation_answer, content = False, None, None
         if self.escalate_below is not None and (raw is None or raw < self.escalate_below):
             escalated = True
             content = self._think(
@@ -247,6 +248,7 @@ class Decider:
             raw_replies=replies,
             escalated=escalated,
             escalation_answer=escalation_answer,
+            escalation_reply=content,
         )
 
     def _think(self, messages: list[dict[str, str]], totals: Counter) -> str | None:

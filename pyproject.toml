@@ -4,19 +4,52 @@ build-backend = "hatchling.build"
 
 [project]
 name = "nirnay"
-version = "0.1.0.dev0"
-description = "Calibrated, cost-accounted decisions (classify / route) on the Sarvam API"
+version = "0.1.0"
+description = "Fast, cheap decisions with honest confidence on the Sarvam API: classify, route and escalate when unsure"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.10"
+authors = [{ name = "Dobbyisus" }]
+keywords = [
+  "sarvam", "llm", "classification", "routing", "intent", "confidence", "calibration",
+  "indic", "hindi", "hinglish", "code-mixed", "india",
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+  "Topic :: Software Development :: Libraries :: Python Modules",
+  "Natural Language :: Hindi",
+  "Natural Language :: Bengali",
+  "Natural Language :: Tamil",
+  "Natural Language :: English",
+]
 dependencies = ["httpx>=0.27"]
 
+# Before publishing, uncomment and fill in (see RELEASING.md):
+# [project.urls]
+# Homepage = "https://github.com/YOUR-GITHUB-USERNAME/nirnay"
+# Source = "https://github.com/YOUR-GITHUB-USERNAME/nirnay"
+# Issues = "https://github.com/YOUR-GITHUB-USERNAME/nirnay/issues"
+
 [project.optional-dependencies]
-dev = ["pytest>=8", "ruff>=0.6", "python-dotenv>=1.0"]
+dev = ["pytest>=8", "ruff>=0.6", "python-dotenv>=1.0", "build", "twine"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/nirnay"]
+
+# Publish ONLY these files in the source distribution. Without this list, hatchling would
+# also ship local-only files (notes, drafts, data) that git merely ignores.
+[tool.hatch.build.targets.sdist]
+only-include = ["src/nirnay", "tests", "README.md", "LICENSE", "pyproject.toml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
